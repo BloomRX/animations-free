@@ -8,11 +8,22 @@ LIB = open(os.path.join(HERE, "ai_mocap_lib.py"), encoding="utf-8").read()
 
 CELLS = []
 
-def md(src):
-    CELLS.append({"cell_type": "markdown", "metadata": {}, "source": src})
+def md(src, collapsed=False):
+    meta = {"jupyter": {"collapsed": True}} if collapsed else {}
+    CELLS.append({"cell_type": "markdown", "metadata": meta, "source": src})
 
-def code(src):
-    CELLS.append({"cell_type": "code", "execution_count": None, "metadata": {},
+def code(src, hidden=False, collapsed=False, hide_outputs=False):
+    """hidden = source_hidden (so output/widgets ficam a mostra);
+    collapsed = celula colapsada; hide_outputs = outputs escondidos no inicio."""
+    j = {}
+    if hidden:
+        j["source_hidden"] = True
+    if collapsed:
+        j["collapsed"] = True
+    if hide_outputs:
+        j["outputs_hidden"] = True
+    CELLS.append({"cell_type": "code", "execution_count": None,
+                  "metadata": {"jupyter": j} if j else {},
                   "outputs": [], "source": src})
 
 # ═══════════════════════════════════════════════════════════════════
@@ -20,6 +31,12 @@ md(r"""# 🎭 Texto → Animação 3D → UE5  (Maid Cat Cafe)
 
 Gere animações de personagem a partir de texto (ex.: *"a maid serves tea gracefully"*) e baixe
 arquivos prontos para **Unreal Engine 5** (IK Retargeter → Manny). Tudo roda no **Colab gratuito (T4)**.
+
+## Como está organizado
+- As células de código já abrem **colapsadas/ocultas** (modo limpo): o único código "visível"
+  é o **CONFIG**, porque ele tem os campos que você preenche. Clique na seta da célula para
+  expandir quando precisar.
+- Rode sempre na ordem: CONFIG → SETUP → GENERATE → EXPORT.
 
 ## Os 4 passos
 1. **CONFIG** (célula 1): escolha o modelo desta sessão + escreva o prompt.
@@ -45,7 +62,7 @@ arquivos prontos para **Unreal Engine 5** (IK Retargeter → Manny). Tudo roda n
 - `*_ue.fbx` — ossos **já batizados com os nomes do Manny** (pelvis, spine_01, thigh_l, thumb_01_l…) →
   IK Retargeter mapeia quase tudo automaticamente. Veja o passo a passo na última célula.
 - `.glb` — mesma animação para Blender/preview. `.bvh` — para Blender/Mixamo. `.npy` — dados brutos.
-""")
+""", collapsed=True)
 
 # ═══════════════════════════════════════════════════════════════════
 code(r"""# ════════════════════════ CONFIG ════════════════════════
@@ -121,12 +138,12 @@ def _run_config():
     print("=" * 74)
 
 _run_config()
-display(widgets.VBox([_model_dd, _prompt_tb, _row1, _row2, _drive_cb]))""")
+display(widgets.VBox([_model_dd, _prompt_tb, _row1, _row2, _drive_cb]))""", hidden=True)
 
 # ═══════════════════════════════════════════════════════════════════
 code("# ════════════════════════ BIBLIOTECA ════════════════════════\n"
      "# Converters SMPL/SOMA -> GLB / FBX(UE5) / BVH + FK + preview.\n"
-     "# (codigo fixo - rode como esta)\n\n" + LIB)
+     "# (codigo fixo - rode como esta)\n\n" + LIB, hidden=True, collapsed=True)
 
 # ═══════════════════════════════════════════════════════════════════
 code(r"""# ════════════════════════ SETUP (env + pesos) ════════════════════════
@@ -243,7 +260,7 @@ elif MODEL == "momask":
     STATE.update(model=MODEL, weights_ready=True)
 
 print(f"SETUP concluido em {time.time()-t0:.0f}s. Modelo: {MODEL}")
-print("Agora rode a celula GENERATE (celula 4).")""")
+print("Agora rode a celula GENERATE (celula 4).")""", hidden=True, collapsed=True, hide_outputs=True)
 
 # ═══════════════════════════════════════════════════════════════════
 code(r"""# ════════════════════════ GENERATE ════════════════════════
@@ -376,7 +393,7 @@ STATE["loaded"] = True
 if not STATE["motions"]:
     raise RuntimeError("Nenhum arquivo de animacao encontrado - veja o log acima")
 print(f"PROMPT: {CFG['prompt']}")
-print(f"{len(STATE['motions'])} animacao(oes) prontas -> rode a celula EXPORT (celula 5).")""")
+print(f"{len(STATE['motions'])} animacao(oes) prontas -> rode a celula EXPORT (celula 5).")""", hidden=True, collapsed=True, hide_outputs=True)
 
 # ═══════════════════════════════════════════════════════════════════
 code(r"""# ════════════════════════ EXPORT + PREVIEW + DOWNLOAD ════════════════════════
@@ -462,7 +479,7 @@ with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
         z.write(f_)
 print("Baixando motion_pack.zip ...")
 files.download(zpath)
-print("Depois: veja o passo a passo de importacao no UE5 (celula 7).")""")
+print("Depois: veja o passo a passo de importacao no UE5 (celula 7).")""", hidden=True)
 
 # ═══════════════════════════════════════════════════════════════════
 md(r"""## 🎮 Importando no Unreal Engine 5 (passo a passo)
@@ -518,7 +535,7 @@ o que deixa o retarget quase automático.
 2. Teste o preview; gostou? Importe o FBX no UE e retargete.
 3. Não gostou? Troque o seed (mesmo modelo, sem download) e gere de novo.
 4. Quer outro modelo? `Runtime → Restart`, CONFIG com o outro modelo.
-""")
+""", collapsed=True)
 
 # ═══════════════════════════════════════════════════════════════════
 nb = {
