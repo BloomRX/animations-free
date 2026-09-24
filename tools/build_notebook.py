@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
-"""Builds notebooks/ai-text-to-motion-colab.ipynb from cell sources."""
+"""Builds notebooks/ai-text-to-motion-colab.ipynb from cell sources.
+
+Nota importante sobre a "visualizacao limpa" no Colab:
+  O Colab *ignora* os metadados clasicos do Jupyter (jupyter.source_hidden /
+  jupyter.collapsed / jupyter.outputs_hidden). O que ele respeita e':
+    - metadata.cellView = "form"  -> esconde o codigo e mostra so' o resultado
+                                     (widgets, banners, preview 3D...);
+    - metadata.id                -> id unico da celula;
+    - metadata.colab.collapsed_sections (no notebook) -> lista de ids que
+                                     comecam recolhidos (so' a barra de titulo).
+  Combinado com "#@title <nome>" no topo da celula, isso deixa a mostra apenas
+  os campos de texto / dropdown, que e' o objetivo do notebook.
+"""
 import json
 import os
 
@@ -7,79 +19,139 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 LIB = open(os.path.join(HERE, "ai_mocap_lib.py"), encoding="utf-8").read()
 
 CELLS = []
+COLLAPSED = []          # ids que o Colab deve abrir ja recolhidos
 
-def md(src, collapsed=False):
-    meta = {"jupyter": {"collapsed": True}} if collapsed else {}
-    CELLS.append({"cell_type": "markdown", "metadata": meta, "source": src})
 
-def code(src, hidden=False, collapsed=False, hide_outputs=False):
-    """hidden = source_hidden (so output/widgets ficam a mostra);
-    collapsed = celula colapsada; hide_outputs = outputs escondidos no inicio."""
-    j = {}
-    if hidden:
-        j["source_hidden"] = True
+def md(src, cid, collapsed=False):
+    """Celula de texto. collapsed -> entra em colab.collapsed_sections."""
+    meta = {"id": cid}
     if collapsed:
-        j["collapsed"] = True
-    if hide_outputs:
-        j["outputs_hidden"] = True
-    CELLS.append({"cell_type": "code", "execution_count": None,
-                  "metadata": {"jupyter": j} if j else {},
-                  "outputs": [], "source": src})
+        COLLAPSED.append(cid)
+    # o id vai nos 2 lugares: nbformat 4.5 espera no nivel da celula,
+    # o Colab le de metadata.id (e usa p/ collapsed_sections).
+    CELLS.append({"cell_type": "markdown", "id": cid, "metadata": meta, "source": src})
+
+
+def code(src, cid, form=True, collapsed=False):
+    """Celula de codigo.
+
+    form=True     -> Colab mostra so' o resultado (codigo escondido).
+    form=False    -> codigo visivel (usado quando faz sentido inspecionar).
+    collapsed=True-> celula comeca recolhida (so' a barra do #@title).
+    """
+    meta = {"id": cid}
+    if form:
+        meta["cellView"] = "form"
+    if collapsed:
+        COLLAPSED.append(cid)
+    CELLS.append({"cell_type": "code", "id": cid, "execution_count": None,
+                  "metadata": meta, "outputs": [], "source": src})
 
 # ═══════════════════════════════════════════════════════════════════
-md(r"""# 🎭 Texto → Animação 3D → UE5  (Maid Cat Cafe)
+md(r"""# 🎭 Texto → Animação 3D → UE5
 
 Gere animações de personagem a partir de texto (ex.: *"a maid serves tea gracefully"*) e baixe
-arquivos prontos para **Unreal Engine 5** (IK Retargeter → Manny). Tudo roda no **Colab gratuito (T4)**.
+arquivos prontos para **Unreal Engine 5** (IK Retargeter → Manny). Roda no **Colab gratuito (T4)**.
 
-## Como está organizado
-- As células de código já abrem **colapsadas/ocultas** (modo limpo): o único código "visível"
-  é o **CONFIG**, porque ele tem os campos que você preenche. Clique na seta da célula para
-  expandir quando precisar.
-- Rode sempre na ordem: CONFIG → SETUP → GENERATE → EXPORT.
+## Como usar (4 passos, nesta ordem)
 
-## Os 4 passos
-1. **CONFIG** (célula 1): escolha o modelo desta sessão + escreva o prompt.
-2. **SETUP** (célula 3): instala dependências + baixa os pesos — **com cache** (só na 1ª vez).
-3. **GENERATE** (célula 4): gera as variações da animação.
-4. **EXPORT** (célula 5): pré-visualização 3D + download de **GLB / FBX(UE5) / BVH / NPZ**.
+| # | Célula | O que faz |
+|---|---|---|
+| ① | **CONFIG** | escolha o modelo + escreva o prompt + ajustes (só esta célula tem campos) |
+| ② | **biblioteca** | código de exportação (GLB/FBX/BVH) — nunca precisa mexer |
+| ③ | **SETUP** | instala as dependências do modelo (1x por sessão, com cache) |
+| ④ | **GENERATE** | gera as variações da animação |
+| ⑤ | **EXPORT** | preview 3D + download do **GLB / FBX(UE5) / BVH / NPZ** |
+
+> **Modo limpo:** as células de código abrem com o **código escondido** (`cellView: form`) — você vê
+> só os campos, os logs e o preview. Para ver o código de qualquer célula, clique em **Mostrar código**.
+
+## ⚠️ Antes de rodar (só para o Kimodo, o modelo padrão)
+
+O Kimodo usa o **Llama-3-8B** como encoder de texto, e esse modelo é *gated* no Hugging Face:
+
+1. Aceite a licença em <https://huggingface.co/meta-llama/Meta-Llama-3-8B-Instruct> (mesma conta do Colab).
+2. Crie um token de leitura em <https://huggingface.co/settings/tokens>.
+3. No Colab: ícone de **chave** (🔑) na barra esquerda → **Secrets** → nome `HF_TOKEN` → valor = seu token.
+   Marque *"Notebook access"*.
+
+Sem isso o SETUP avisa e a geração falha ao baixar o encoder.
+
+**Primeira geração é demorada:** o encoder de texto (Llama-3-8B, ~16 GB) é baixado 1x por runtime.
+Depois fica no cache local (`/content/ai_mocap_cache/hf`).
+
+## Encoder de texto: qual escolher (campo no CONFIG)
+
+O Llama-3-8B em bf16 pesa ~16 GB — não cabe inteiro nem na VRAM (16 GB) nem na RAM (≈12,7 GB) do
+Colab gratuito. Por isso o padrão é **auto**, que decide assim:
+
+| Situação | Escolha | Onde roda |
+|---|---|---|
+| GPU com ≥ 20 GB de VRAM (A100/L4/4090…) | `gpu` | bf16 na GPU — o mais rápido |
+| RAM ≥ 24 GB (Kaggle, Colab Pro) | `cpu` | bf16 na CPU — ~<3 GB de VRAM |
+| **T4 grátis / pouca RAM** (o caso comum) | `4bit` | **quantizado em 4-bit na GPU (~6 GB)** |
+
+Se estourar memória, mude para `4bit` (ou `cpu`), reduza **Variações** e **Duração** e rode ④ de novo.
 
 ## Modelos (todos gratuitos)
-| Modelo | Qualidades | VRAM (T4) | Licença |
+
+| Modelo | Qualidades | Memória | Licença |
 |---|---|---|---|
-| ⭐ **Kimodo SOMA-RP v1.1** (NVIDIA) | Melhor qualidade; **77 joints (dedos!)**; realista | <3 GB (encoder de texto no CPU) | NVIDIA Open + Apache 2.0 ✅ comercial |
-| **HY-Motion 1.0 Lite** (Tencent) | Muito rápido; bom p/ dança e movimentos casuais (200+ categorias) | ~16 GB (cabe no T4) | Tencent Community License ✅ comercial (<1M MAU; Brasil ok) |
+| ⭐ **Kimodo SOMA-RP v1.1** (NVIDIA) | Melhor qualidade; **77 joints (dedos!)**; realista | ~6 GB VRAM (encoder 4-bit) | NVIDIA Open Model ✅ comercial |
+| **HY-Motion 1.0 Lite** (Tencent) | Muito rápido; bom p/ dança e movimentos casuais | ~16 GB (cabe no T4) | Tencent Community ✅ comercial |
 | **MoMask** (CVPR 2024) | Segue bem instruções precisas (contar passos, direções) | ~8 GB | MIT ✅ comercial |
 
 ## Como funciona a sessão
-- **1 modelo por sessão** (de propósito: os pesos ficam na memória). Para trocar de modelo:
-  `Runtime → Restart runtime` (e o SETUP roda de novo, usando o cache local/Drive).
-- Rodar **novamente o mesmo modelo NÃO re-baixa nada** — o CONFIG (célula 1) avisa
-  "✅ já carregado nesta sessão".
-- Marque **"Google Drive"** no CONFIG para o cache de pesos sobreviver a resets do Colab grátis.
+
+- **1 modelo por sessão** (de propósito). Para trocar: `Runtime → Restart runtime`.
+- Reexecutar o ③ SETUP **não re-baixa** nada (cache em `/content`, e no Drive se marcado).
+- Marque **"Google Drive"** no ① CONFIG para o cache dos repos/pesos sobreviver a resets.
 
 ## Saída para o UE
-- `*_ue.fbx` — ossos **já batizados com os nomes do Manny** (pelvis, spine_01, thigh_l, thumb_01_l…) →
-  IK Retargeter mapeia quase tudo automaticamente. Veja o passo a passo na última célula.
-- `.glb` — mesma animação para Blender/preview. `.bvh` — para Blender/Mixamo. `.npy` — dados brutos.
-""", collapsed=True)
+
+- `*_ue.fbx` — ossos **já batizados com os nomes do Manny** (`pelvis`, `spine_01`, `thigh_l`,
+  `thumb_01_l`…) → o IK Retargeter mapeia quase tudo automático.
+- `.glb` — mesma animação para Blender/preview. `.bvh` — Blender/Mixamo. `.npy` — dados brutos.
+
+## 🔧 Se o ③ SETUP falhar
+
+- O SETUP mostra o **fim do log** completo (`/content/ai_mocap_cache/setup.log`) em vez de só
+  “falhou o comando”.
+- O Kimodo é instalado **sem** compilar o pós-processamento em C++ (é o que quebrava o `pip install`
+  no Colab, por falta de `cmake`). A geração então roda com `--no-postprocess`.
+- Quer o pós-processamento (limpa deslize dos pés)? Marque **"Compilar pos-processamento"** no
+  ① CONFIG — o setup instala `cmake`/`eigen`/`pybind11` e compila (~5 min).
+""", cid="introMd", collapsed=True)
 
 # ═══════════════════════════════════════════════════════════════════
-code(r"""# ════════════════════════ CONFIG ════════════════════════
+code(r"""#@title ① CONFIG — modelo + prompt + opções
+# ════════════════════════ ① CONFIG ════════════════════════
 # 1) Escolha o MODELO desta sessão (para trocar: Runtime -> Restart)
 # 2) Escreva o PROMPT (em inglês, descrevendo o movimento)
-# 3) Rode esta célula -> depois rode a célula SETUP (1a vez) e GENERATE
+# 3) Rode esta célula -> depois rode ③ SETUP (1a vez) e ④ GENERATE
 
 import ipywidgets as widgets
 import datetime
 
 MODELS = {
-    "kimodo":   "Kimodo SOMA-RP v1.1 (NVIDIA) - MELHOR QUALIDADE, tem dedos, <3GB VRAM",
+    "kimodo":   "Kimodo SOMA-RP v1.1 (NVIDIA) - MELHOR qualidade, 77 joints (dedos!), ~6GB VRAM",
     "hymotion": "HY-Motion 1.0 Lite (Tencent) - rapido, bom p/ danca e movimentos casuais",
     "momask":   "MoMask (CVPR 2024) - segue bem instrucoes precisas",
 }
 
-STATE = {"model": None, "loaded": False, "weights_ready": False, "motions": []}
+# Onde o encoder de texto do Kimodo (Llama-3-8B) roda. So' afeta o Kimodo.
+ENCODERS = {
+    "auto": "auto - escolhe sozinho pela VRAM/RAM (recomendado)",
+    "4bit": "GPU 4-bit - Llama-3-8B quantizado (~6GB VRAM) - cabe no T4 gratis",
+    "gpu":  "GPU bf16 - o mais rapido (precisa de ~20GB de VRAM)",
+    "cpu":  "CPU bf16 - precisa de ~20GB de RAM (Kaggle / Colab Pro)",
+}
+
+# o CONFIG pode ser re-executado so' p/ mudar o prompt: nao zera o historico.
+try:
+    STATE
+except NameError:
+    STATE = {"model": None, "loaded": False, "weights_ready": False, "motions": []}
 
 _model_dd   = widgets.Dropdown(options=list(MODELS), value="kimodo",
                                description="MODELO (sessao)", layout=widgets.Layout(width="700px"))
@@ -100,6 +172,14 @@ _row2 = widgets.HBox([
     widgets.FloatText(value=0.95, description="Altura do pelvis (m)",
                       layout=widgets.Layout(width="260px")),
 ])
+_row3 = widgets.HBox([
+    widgets.Dropdown(options=list(ENCODERS), value="auto",
+                     description="Encoder de texto (Kimodo)",
+                     layout=widgets.Layout(width="430px")),
+    widgets.Checkbox(value=False,
+                     description="Compilar pos-processamento foot-skate (+~5min no setup)",
+                     layout=widgets.Layout(width="430px")),
+])
 _drive_cb = widgets.Checkbox(value=False,
                              description="Manter cache de pesos no Google Drive (recomendado - nao precisa remountar)")
 
@@ -116,6 +196,8 @@ def _run_config():
         "root_mode": _row2.children[1].value,
         "pelvis_h": float(_row2.children[2].value),
         "use_drive": _drive_cb.value,
+        "text_encoder": _row3.children[0].value,
+        "compile_postprocess": bool(_row3.children[1].value),
         "_ok": True,
     })
     print("=" * 74)
@@ -125,55 +207,104 @@ def _run_config():
     print(f"DURACAO:     {CFG['duration']}s | VARIACOES: {CFG['samples']} | SEED: {CFG['seed']}")
     print(f"OSSOS:       {CFG['skeleton']}  (ue5_manny = ossos batizados p/ Manny)")
     print(f"ROOT (UE):   {CFG['root_mode']}  (floor = pelvis a {CFG['pelvis_h']}m do chao)")
+    if CFG["model"] == "kimodo":
+        print(f"ENCODER:     {CFG['text_encoder']}  ({ENCODERS[CFG['text_encoder']]})")
+        print(f"FOOT-SKATE:  {'vai compilar o C++ no setup' if CFG['compile_postprocess'] else 'desligado (setup rapido)'}")
     print("-" * 74)
     if STATE["loaded"] and STATE["model"] == CFG["model"]:
-        print(f"  {CFG['model']} JA CARREGADO nesta sessao.")
-        print("  -> NAO vai baixar nada de novo. Rode direto a celula GENERATE (celula 4).")
+        print(f"  {CFG['model']} JA PRONTO nesta sessao.")
+        print("  -> NAO vai baixar nada de novo. Rode direto a celula ④ GENERATE.")
+        if CFG["model"] == "kimodo":
+            enc = STATE.get("text_encoder", "auto")
+            print(f"  -> encoder de texto: {enc} (recarrega do cache local a cada geracao)")
     elif STATE["model"] is not None and STATE["model"] != CFG["model"]:
         print(f"  ATT: a sessao esta presa ao modelo '{STATE['model']}'.")
         print("  Para trocar: Runtime -> Restart runtime (os pesos ficam em cache/Drive).")
     else:
-        print("  1o uso deste modelo na sessao: rode a celula SETUP (celula 3)")
+        print("  1o uso deste modelo na sessao: rode a celula ③ SETUP")
         print("  (instala dependencias + baixa pesos - com cache, uma unica vez).")
     print("=" * 74)
 
 _run_config()
-display(widgets.VBox([_model_dd, _prompt_tb, _row1, _row2, _drive_cb]))""", hidden=True)
+display(widgets.VBox([_model_dd, _prompt_tb, _row1, _row2, _row3, _drive_cb]))""",
+     cid="cellConfig")
 
 # ═══════════════════════════════════════════════════════════════════
 code("# ════════════════════════ BIBLIOTECA ════════════════════════\n"
      "# Converters SMPL/SOMA -> GLB / FBX(UE5) / BVH + FK + preview.\n"
-     "# (codigo fixo - rode como esta)\n\n" + LIB, hidden=True, collapsed=True)
+     "# (codigo fixo - rode como esta)\n\n" + LIB,
+     cid="cellLibrary", collapsed=True)
 
 # ═══════════════════════════════════════════════════════════════════
-code(r"""# ════════════════════════ SETUP (env + pesos) ════════════════════════
-# Rode uma vez por modelo/sessao. Usa cache local (/content) e opcional (Drive):
-#   2a vez no mesmo Colab        -> nada baixa (cache local)
-#   apos restart do runtime      -> nada baixa (cache local sobrevive em /content? NAO:
-#                                     /content limpa no restart) -> baixa do Drive
-#   outro notebook (mesma conta) -> baixa do Drive
+code(r"""#@title ③ SETUP — instala o modelo da sessão (rode 1x)
+# ════════════════════════ ③ SETUP (ambiente + pesos) ════════════════════════
+# Rode 1x por sessao. Usa cache em /content (e no Drive, se marcado no CONFIG).
 import os, sys, shutil, subprocess, glob, time
+import torch
 
 if not CFG.get("_ok"):
-    raise RuntimeError("Rode a celula CONFIG (celula 1) primeiro.")
-MODEL = CFG["model"]
+    raise RuntimeError("Rode a celula ① CONFIG primeiro.")
 
+MODEL = CFG["model"]
 CACHE = "/content/ai_mocap_cache"
 REPO  = "/content/ai_mocap"
-os.makedirs(CACHE, exist_ok=True); os.makedirs(REPO, exist_ok=True)
+LOG   = f"{CACHE}/setup.log"
+os.makedirs(CACHE, exist_ok=True)
+os.makedirs(REPO, exist_ok=True)
+open(LOG, "a").close()
+
 DRIVE = os.path.expanduser("~/drive/MyDrive/ai_mocap_cache")
 USE_DRIVE = CFG.get("use_drive", False) and os.path.isdir(os.path.expanduser("~/drive/MyDrive"))
 if CFG.get("use_drive") and not USE_DRIVE:
-    print("ATT: Google Drive nao montado -> cache so local. (Runtime -> Mount Drive, se quiser)")
+    print("ATT: Google Drive nao montado -> cache apenas local.")
 
-import torch
 print("GPU:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU (vai demorar!)")
 
-def run(cmd):
+
+def run(cmd, timeout=None, tail=60):
+    'Roda um comando com saida AO VIVO e, se falhar, mostra o fim do log.'
     print("$ " + cmd, flush=True)
-    r = subprocess.run(cmd, shell=True)
-    if r.returncode != 0:
-        raise RuntimeError(f"Falhou o comando: {cmd}")
+    p = subprocess.run(["bash", "-o", "pipefail", "-c", cmd + f" 2>&1 | tee -a {LOG}"],
+                       timeout=timeout)
+    if p.returncode != 0:
+        try:
+            txt = open(LOG, errors="replace").read().splitlines()[-tail:]
+            print("-" * 70)
+            print("\n".join(txt))
+            print("-" * 70)
+        except Exception:
+            pass
+        raise RuntimeError(f"FALHOU: {cmd}\n(log completo em {LOG})")
+    return True
+
+
+def pip(specs, label=""):
+    'pip install tolerante: tenta o bloco inteiro e, se falhar, um por um.'
+    q = " ".join('"%s"' % sp for sp in specs)
+    try:
+        return run("pip install -q " + q)
+    except Exception:
+        print("  (bloco '%s' falhou -> tentando 1 a 1)" % (label or q))
+        ok = True
+        for sp in specs:
+            try:
+                run('pip install -q "%s"' % sp)
+            except Exception as e:
+                print("  ATT: nao consegui instalar", sp, "->", str(e)[:160])
+                ok = False
+        return ok
+
+
+def can_import(mod):
+    'True se o modulo importa num processo novo (testado fora da pasta do repo).'
+    kw = {"cwd": "/content"} if os.path.isdir("/content") else {}
+    try:
+        r = subprocess.run([sys.executable, "-c", "import %s" % mod],
+                           capture_output=True, text=True, **kw)
+        return r.returncode == 0
+    except Exception:
+        return False
+
 
 def get_repo(name, git_url):
     local = f"{REPO}/{name}"
@@ -190,6 +321,7 @@ def get_repo(name, git_url):
             os.makedirs(DRIVE, exist_ok=True); shutil.copytree(local, d, dirs_exist_ok=True)
     return local
 
+
 def get_weights(name, test, download_cmd, drive_sub=None):
     local = f"{CACHE}/{name}"
     if os.path.isdir(local) and test(local):
@@ -205,13 +337,117 @@ def get_weights(name, test, download_cmd, drive_sub=None):
             os.makedirs(DRIVE, exist_ok=True); shutil.copytree(local, f"{DRIVE}/{name}", dirs_exist_ok=True)
     return local
 
+
+def mem_info():
+    ram = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9
+    vram = torch.cuda.get_device_properties(0).total_memory / 1e9 if torch.cuda.is_available() else 0.0
+    return vram, ram
+
+
+def hf_token():
+    'Pega o token do HF: Secrets do Colab (HF_TOKEN) ou variavel de ambiente.'
+    tok = os.environ.get("HF_TOKEN")
+    if not tok:
+        try:
+            from google.colab import userdata
+            tok = userdata.get("HF_TOKEN")
+        except Exception:
+            tok = None
+    return tok
+
+
+# dependencias do Kimodo em blocos (o resolvedor do pip trabalha melhor assim)
+KIMODO_CORE = ["transformers==5.1.0", "peft>=0.18", "accelerate>=0.30",
+               "safetensors", "huggingface_hub", "tokenizers"]
+KIMODO_CFG  = ["hydra-core>=1.3", "omegaconf>=2.3", "einops>=0.7", "tqdm>=4.0",
+               "packaging>=21.0", "pydantic>=2.0", "filelock>=3.20.3"]
+KIMODO_MISC = ["trimesh>=3.21.7", "pillow>=9.0", "bvhio", "scipy>=1.10"]
+
+VRAM, RAM = mem_info()
+print(f"  VRAM: {VRAM:.1f} GB | RAM: {RAM:.1f} GB")
+HF_TOK = hf_token()
+os.environ["HF_HOME"] = f"{CACHE}/hf"
+os.environ["HUGGINGFACE_CACHE_DIR"] = f"{CACHE}/hf/hub"
+os.makedirs(f"{CACHE}/hf", exist_ok=True)
+
 t0 = time.time()
 if MODEL == "kimodo":
+    # --- token do Hugging Face: o text encoder do Kimodo usa o Llama-3-8B (gated)
+    if HF_TOK:
+        os.environ["HF_TOKEN"] = HF_TOK
+        os.environ["HUGGINGFACE_HUB_TOKEN"] = HF_TOK
+        try:
+            from huggingface_hub import login, HfApi
+            login(token=HF_TOK, add_to_git_credential=False)
+            print("  HF: logado como", HfApi(token=HF_TOK).whoami().get("name", "?"))
+        except Exception as e:
+            print("  ATT: nao consegui validar o token HF ->", str(e)[:160])
+    else:
+        print("  ATT: HF_TOKEN nao encontrado.")
+        print("       Colab: icone de chave (esquerda) -> Secrets -> nome: HF_TOKEN")
+        print("       Sem ele o Kimodo NAO baixa o Llama-3-8B do encoder de texto.")
+
     repo = get_repo("kimodo", "https://github.com/nv-tlabs/kimodo")
-    print("  Instalando pacotes do Kimodo...")
-    run(f"pip install -q {repo}")
-    os.makedirs(f"{CACHE}/hf", exist_ok=True)   # cache dos pesos NVIDIA (auto-download na 1a generacao)
-    STATE.update(model=MODEL, weights_ready=True)
+    SKIP = "SKIP_MOTION_CORRECTION_IN_SETUP=1"   # nao compila o C++ do pos-processamento
+    ok = False
+
+    if CFG.get("compile_postprocess"):
+        print("  Compilando o pos-processamento em C++ (leva alguns minutos)...")
+        try:
+            run("apt-get -qq update && apt-get -qq install -y cmake libeigen3-dev "
+                "pybind11-dev || pip install -q cmake")
+            run(f"pip install -q {repo}")
+            ok = can_import("kimodo")
+        except Exception as e:
+            print("  ATT: instalação completa falhou ->", str(e)[:160])
+
+    if not ok:
+        print("  Instalando o Kimodo (sem o C++ do pos-processamento: nao precisa de cmake)...")
+        try:
+            run(f"{SKIP} pip install -q --no-deps {repo}")
+            pip(KIMODO_CORE, "core")
+            pip(KIMODO_CFG, "config")
+            pip(KIMODO_MISC, "misc")
+            ok = can_import("kimodo")
+        except Exception as e:
+            print("  ATT:", str(e)[:160])
+
+    if not ok:
+        print("  2a tentativa: deixando o pip resolver as dependencias do proprio Kimodo...")
+        try:
+            run(f"{SKIP} pip install -q {repo}")
+            ok = can_import("kimodo")
+        except Exception as e:
+            print("  ATT:", str(e)[:160])
+
+    if not ok:
+        print("  3a tentativa: instalar cmake/eigen e compilar tudo...")
+        run("apt-get -qq update && apt-get -qq install -y cmake libeigen3-dev "
+            "pybind11-dev || pip install -q cmake")
+        run(f"pip install -q {repo}")
+        ok = can_import("kimodo")
+
+    if not ok:
+        raise RuntimeError("Nao consegui importar o Kimodo. Log completo em " + LOG)
+
+    has_mc = can_import("motion_correction")
+    enc = CFG.get("text_encoder", "auto")
+    if enc == "auto":
+        enc = "gpu" if VRAM >= 20 else ("cpu" if RAM >= 24 else "4bit")
+    if enc in ("gpu", "4bit") and not torch.cuda.is_available():
+        print("  ATT: sem GPU -> encoder no CPU")
+        enc = "cpu"
+    if enc == "cpu" and RAM < 20:
+        print("  ATT: encoder no CPU com so %.1f GB de RAM - provavel OOM." % RAM)
+        print("       No CONFIG escolha 'Encoder de texto' = 4bit.")
+    if enc == "4bit":
+        pip(["bitsandbytes"], "bitsandbytes")
+    STATE.update(model=MODEL, weights_ready=True, text_encoder=enc,
+                 has_motion_correction=has_mc)
+    print("  Kimodo instalado.")
+    print("  Encoder de texto:", enc, "->", {"4bit": "GPU 4-bit", "gpu": "GPU bf16",
+                                             "cpu": "CPU bf16"}[enc])
+    print("  Pos-processamento (foot-skate):", "disponivel" if has_mc else "indisponivel (gera com --no-postprocess)")
 
 elif MODEL == "hymotion":
     repo = get_repo("hymotion", "https://github.com/Tencent-Hunyuan/HY-Motion-1.0")
@@ -260,29 +496,75 @@ elif MODEL == "momask":
     STATE.update(model=MODEL, weights_ready=True)
 
 print(f"SETUP concluido em {time.time()-t0:.0f}s. Modelo: {MODEL}")
-print("Agora rode a celula GENERATE (celula 4).")""", hidden=True, collapsed=True, hide_outputs=True)
+print("Agora rode a celula ④ GENERATE.")""",
+     cid="cellSetup")
 
 # ═══════════════════════════════════════════════════════════════════
-code(r"""# ════════════════════════ GENERATE ════════════════════════
+code(r"""#@title ④ GENERATE — gerar as animações
+# ════════════════════════ ④ GENERATE ════════════════════════
 # Gera as variacoes da animacao com o modelo da sessao.
-# Se o modelo ja esta carregado: gera direto, SEM re-download.
-import os, sys, glob, subprocess, datetime
+import os, sys, glob, subprocess, datetime, shlex
 
 if not CFG.get("_ok"):
-    raise RuntimeError("Rode a celula CONFIG (celula 1) primeiro.")
+    raise RuntimeError("Rode a celula ① CONFIG primeiro.")
 if STATE["model"] != CFG["model"]:
     if STATE["loaded"]:
         raise RuntimeError(
             f"Esta sessao esta usando '{STATE['model']}'. Para trocar de modelo: "
             "Runtime -> Restart runtime (1 modelo por sessao, de proposito).")
-    raise RuntimeError("Rode a celula SETUP (celula 3) primeiro.")
+    raise RuntimeError("Rode a celula ③ SETUP primeiro.")
 
 if STATE["loaded"]:
-    print(f"  {CFG['model']} ja carregado nesta sessao -> gerando direto (sem re-download)")
+    print(f"  {CFG['model']} ja configurado nesta sessao -> gerando (sem baixar nada)")
 else:
     if not STATE["weights_ready"]:
-        raise RuntimeError("Rode a celula SETUP (celula 3) primeiro.")
-    print(f"  {CFG['model']} carregando pela 1a vez nesta sessao...")
+        raise RuntimeError("Rode a celula ③ SETUP primeiro.")
+    print(f"  {CFG['model']}: 1a geracao desta sessao (o encoder recarrega do cache local)")
+
+KIMODO_RUNNER = r'''# -*- coding: utf-8 -*-
+# Chama o CLI do Kimodo aplicando (se preciso) o ajuste do encoder de texto.
+# Roda como subprocesso: se estourar a memoria, o kernel do Colab sobrevive.
+import os, sys
+
+mode = os.environ.get("KM_ENCODER", "cpu")
+
+if mode == "4bit":
+    import torch
+    from transformers import BitsAndBytesConfig
+    from kimodo.model.llm2vec.llm2vec import LLM2Vec
+
+    _orig_from_pretrained = LLM2Vec.from_pretrained.__func__
+
+    def _from_pretrained_4bit(cls, *args, **kwargs):
+        kwargs.setdefault("quantization_config", BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+        ))
+        kwargs.setdefault("device_map", {"": 0})
+        print("[kimodo] text encoder: Llama-3-8B em 4-bit (NF4) na GPU", flush=True)
+        return _orig_from_pretrained(cls, *args, **kwargs)
+
+    LLM2Vec.from_pretrained = classmethod(_from_pretrained_4bit)
+
+    # rede de seguranca: alguns builds reclamam ao mover um modelo quantizado
+    _orig_to = LLM2Vec.to
+
+    def _to(self, device, *a, **k):
+        try:
+            return _orig_to(self, device, *a, **k)
+        except Exception as e:
+            print("[kimodo] ignorando .to(%s): %s" % (device, e), flush=True)
+            return self
+
+    LLM2Vec.to = _to
+
+sys.argv = ["kimodo.scripts.generate"] + sys.argv[1:]
+from kimodo.scripts.generate import main
+main()
+'''
+
 
 ts = datetime.datetime.now().strftime("%H%M%S")
 OUT = f"/content/ai_mocap_out/{ts}"
@@ -291,23 +573,62 @@ STATE["motions"] = []
 MODEL = CFG["model"]
 
 if MODEL == "kimodo":
+    enc = STATE.get("text_encoder", "cpu")
+    RUNNER = f"{CACHE}/kimodo_run.py"
+    with open(RUNNER, "w", encoding="utf-8") as f:
+        f.write(KIMODO_RUNNER)
+
     env = os.environ.copy()
-    env["TEXT_ENCODER_DEVICE"] = "cpu"      # encoder de texto no CPU -> usa <3GB de VRAM na T4
-    env["HF_HOME"] = f"{CACHE}/hf"          # cache dos pesos NVIDIA
+    env.update({
+        "HF_HOME": f"{CACHE}/hf",
+        "HF_HUB_CACHE": f"{CACHE}/hf/hub",
+        "HUGGINGFACE_CACHE_DIR": f"{CACHE}/hf/hub",
+        "TRANSFORMERS_CACHE": f"{CACHE}/hf/transformers",
+        "TEXT_ENCODER_MODE": "local",                 # nao procura o servico de encoder
+        "TEXT_ENCODER_DEVICE": "cuda" if enc in ("gpu", "4bit") else "cpu",
+        "KM_ENCODER": enc,
+        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+        "TOKENIZERS_PARALLELISM": "false",
+    })
+    tok = globals().get("HF_TOK") or os.environ.get("HF_TOKEN")
+    if tok:
+        env["HF_TOKEN"] = tok
+        env["HUGGINGFACE_HUB_TOKEN"] = tok
+
     stem = f"{OUT}/gen"
-    cmd = [sys.executable, "-m", "kimodo.scripts.generate", CFG["prompt"],
-           "--model", "Kimodo-SOMA-RP-v1.1",
-           "--duration", str(CFG["duration"]),
-           "--num_samples", str(CFG["samples"]),
-           "--seed", str(CFG["seed"]),
-           "--bvh", "--bvh_standard_tpose",
-           "--output", stem]
-    print("$ " + " ".join(cmd))
-    r = subprocess.run(cmd, env=env, cwd=f"{REPO}/kimodo")
-    if r.returncode != 0:
-        raise RuntimeError("Falha na geracao do Kimodo (veja o log acima)")
-    STATE["motions"] = [{"model": "kimodo", "bvh": p}
-                        for p in sorted(glob.glob(stem + "*.bvh") + glob.glob(stem + "/*.bvh"))]
+    args = [sys.executable, RUNNER, CFG["prompt"],
+            "--model", "Kimodo-SOMA-RP-v1.1",
+            "--duration", str(CFG["duration"]),
+            "--num_samples", str(CFG["samples"]),
+            "--seed", str(CFG["seed"]),
+            "--bvh", "--bvh_standard_tpose",
+            "--output", stem]
+    if not STATE.get("has_motion_correction"):
+        args.append("--no-postprocess")   # o C++ do pos-processamento nao foi compilado
+    cmd = " ".join(shlex.quote(a) for a in args)
+    print("$ " + cmd, flush=True)
+
+    genlog = f"{OUT}/generate.log"
+    p = subprocess.run(["bash", "-o", "pipefail", "-c", cmd + f" 2>&1 | tee {genlog}"],
+                       env=env, cwd="/content")
+    if p.returncode != 0:
+        txt = ""
+        try:
+            txt = open(genlog, errors="replace").read().lower()
+        except Exception:
+            pass
+        if "out of memory" in txt or "cuda oom" in txt or "killed" in txt:
+            print("  DICA: faltou memoria. No CONFIG tente 'Encoder de texto' = 4bit,")
+            print("        menos variações / duração menor, ou um runtime com mais VRAM.")
+        if ("401" in txt or "403" in txt or "gated" in txt
+                or "restricted" in txt or "not authorized" in txt):
+            print("  DICA: sem acesso ao modelo do encoder de texto (Llama-3-8B).")
+            print("        Aceite a licenca em https://huggingface.co/meta-llama/Meta-Llama-3-8B-Instruct")
+            print("        e confira o Secret HF_TOKEN do Colab.")
+        raise RuntimeError(f"Falha na geracao do Kimodo (log: {genlog})")
+
+    STATE["motions"] = [{"model": "kimodo", "bvh": bp}
+                        for bp in sorted(glob.glob(stem + "*.bvh") + glob.glob(stem + "/*.bvh"))]
     print(f"  {len(STATE['motions'])} animacao(oes) gerada(s) -> {OUT}")
 
 elif MODEL == "hymotion":
@@ -393,7 +714,8 @@ STATE["loaded"] = True
 if not STATE["motions"]:
     raise RuntimeError("Nenhum arquivo de animacao encontrado - veja o log acima")
 print(f"PROMPT: {CFG['prompt']}")
-print(f"{len(STATE['motions'])} animacao(oes) prontas -> rode a celula EXPORT (celula 5).")""", hidden=True, collapsed=True, hide_outputs=True)
+print(f"{len(STATE['motions'])} animacao(oes) prontas -> rode a celula ⑤ EXPORT.")""",
+     cid="cellGenerate")
 
 # ═══════════════════════════════════════════════════════════════════
 code(r"""# ════════════════════════ EXPORT + PREVIEW + DOWNLOAD ════════════════════════
@@ -479,7 +801,8 @@ with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
         z.write(f_)
 print("Baixando motion_pack.zip ...")
 files.download(zpath)
-print("Depois: veja o passo a passo de importacao no UE5 (celula 7).")""", hidden=True)
+print("Depois: veja o passo a passo de importacao no UE5 na ultima celula.")""",
+     cid="cellExport")
 
 # ═══════════════════════════════════════════════════════════════════
 md(r"""## 🎮 Importando no Unreal Engine 5 (passo a passo)
@@ -535,7 +858,7 @@ o que deixa o retarget quase automático.
 2. Teste o preview; gostou? Importe o FBX no UE e retargete.
 3. Não gostou? Troque o seed (mesmo modelo, sem download) e gere de novo.
 4. Quer outro modelo? `Runtime → Restart`, CONFIG com o outro modelo.
-""", collapsed=True)
+""", cid="unrealGuideMd", collapsed=True)
 
 # ═══════════════════════════════════════════════════════════════════
 nb = {
@@ -545,15 +868,29 @@ nb = {
         "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
         "language_info": {"name": "python", "version": "3.11"},
         "accelerator": "GPU",
+        # metadados que o proprio Colab usa p/ abrir o notebook no "modo limpo"
+        "colab": {
+            "provenance": [],
+            "toc_visible": True,
+            "collapsed_sections": COLLAPSED,
+        },
     },
     "cells": CELLS,
 }
+# sanity 1: ids unicos
+_ids = [c["id"] for c in CELLS]
+assert len(_ids) == len(set(_ids)), "ids de celula duplicados: %s" % _ids
+
+# sanity 2: toda celula de codigo compila
+for _c in CELLS:
+    if _c["cell_type"] == "code":
+        compile(_c["source"], _c["metadata"]["id"], "exec")
+
 out_path = os.path.join(os.path.dirname(HERE), "notebooks", "ai-text-to-motion-colab.ipynb")
 os.makedirs(os.path.dirname(out_path), exist_ok=True)
 with open(out_path, "w", encoding="utf-8") as f:
     json.dump(nb, f, ensure_ascii=False, indent=1)
-print("written:", out_path, "| cells:", len(CELLS))
 
-# sanity: json valid
+# sanity 3: json valido + volta legivel
 json.load(open(out_path))
-print("JSON valid")
+print("written:", out_path, "| cells:", len(CELLS), "| collapsed:", COLLAPSED)
